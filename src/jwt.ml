@@ -347,10 +347,6 @@ let t_of_token token =
 (* ---------------------------------- *)
 (* ----------- Verification ---------- *)
 
-let asn1_sha256 =
-  Cstruct.of_string
-    "\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20"
-
 let verify ~(pub_key : public_key) t =
   let rs256 key signature unsigned_token =
     let pkcs1_sig header body =
@@ -361,9 +357,12 @@ let verify ~(pub_key : public_key) t =
         | _ -> None
       else None
     in
-    let open Mirage_crypto_pk in
+    let asn1_sha256 =
+      Cstruct.of_string
+        "\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20"
+    in
     let sign = Cstruct.of_string signature in
-    match Rsa.PKCS1.sig_decode ~key sign with
+    match Mirage_crypto_pk.Rsa.PKCS1.sig_decode ~key sign with
     | None -> false
     | Some asn1_sign -> (
         match pkcs1_sig asn1_sha256 asn1_sign with
