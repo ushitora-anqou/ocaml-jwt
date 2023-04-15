@@ -91,8 +91,22 @@ let check_payload () =
   print_endline encoded_signature_t2
 *)
 
+let check_verify () =
+  let open Jwt in
+  let priv_key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
+  let pub_key = Mirage_crypto_pk.Rsa.pub_of_priv priv_key in
+  let header = make_header ~alg:(`RS256 (Some priv_key)) () in
+  let payload = empty_payload |> add_claim sub "" |> add_claim aud "" in
+  let t = t_of_header_and_payload header payload in
+  match Jwt.verify ~alg:`RS256 ~pub_key t with
+  | Error s -> failwith s
+  | Ok () -> ()
+
 let () =
+  Mirage_crypto_rng_unix.initialize ();
   print_endline "Checking header";
   check_header ();
   print_endline "Checking payload";
-  check_payload ()
+  check_payload ();
+  print_endline "Checking verify";
+  check_verify ()

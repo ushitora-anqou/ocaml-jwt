@@ -31,10 +31,10 @@ exception Bad_payload
 
 (* IMPROVEME: add other algorithm *)
 type algorithm =
-  | RS256 of Mirage_crypto_pk.Rsa.priv option
-  | HS256 of Cstruct.t (* the argument is the secret key *)
-  | HS512 of Cstruct.t (* the argument is the secret key *)
-  | Unknown
+  [ `RS256 of Mirage_crypto_pk.Rsa.priv option
+  | `HS256 of Cstruct.t (* the argument is the secret key *)
+  | `HS512 of Cstruct.t (* the argument is the secret key *)
+  | `Unknown ]
 
 val string_of_algorithm : algorithm -> string
 val algorithm_of_string : string -> algorithm
@@ -47,7 +47,9 @@ val algorithm_of_string : string -> algorithm
 
 type header
 
-val make_header : alg:algorithm -> ?typ:string -> ?kid:string -> unit -> header
+val make_header :
+  alg:algorithm -> ?typ:string option -> ?kid:string -> unit -> header
+
 val header_of_algorithm_and_typ : algorithm -> string option -> header
 
 (* ------- *)
@@ -194,4 +196,8 @@ val t_of_token : string -> t
 (* ----------- JWT type ----------- *)
 (* -------------------------------- *)
 
-val verify : alg:string -> jwks:Yojson.Basic.t -> t -> bool
+val verify :
+  alg:[< `RS256 ] ->
+  pub_key:Mirage_crypto_pk.Rsa.pub ->
+  t ->
+  (unit, string) result

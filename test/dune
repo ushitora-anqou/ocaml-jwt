@@ -1,8 +1,9 @@
 (executable
  (name test)
  (modules test)
- (libraries jwt base64))
+ (libraries jwt base64 x509 mirage-crypto-rng.unix))
 
 (alias
- (name   runtest)
- (action (run ./test.exe)))
+ (name runtest)
+ (action
+  (run ./test.exe)))

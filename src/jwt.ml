@@ -31,43 +31,43 @@ exception Bad_payload
 
 (* IMPROVEME: add other algorithm *)
 type algorithm =
-  | RS256 of Mirage_crypto_pk.Rsa.priv option
-  | HS256 of Cstruct.t (* the argument is the secret key *)
-  | HS512 of Cstruct.t (* the argument is the secret key *)
-  | Unknown
+  [ `RS256 of Mirage_crypto_pk.Rsa.priv option
+  | `HS256 of Cstruct.t (* the argument is the secret key *)
+  | `HS512 of Cstruct.t (* the argument is the secret key *)
+  | `Unknown ]
 
 let fn_of_algorithm = function
-  | RS256 (Some key) ->
+  | `RS256 (Some key) ->
       fun input_str ->
         Mirage_crypto_pk.Rsa.PKCS1.sign ~hash:`SHA256 ~key
           (`Message (Cstruct.of_string input_str))
         |> Cstruct.to_string
-  | RS256 None -> failwith "Not supported"
-  | HS256 key ->
+  | `RS256 None -> failwith "Not supported"
+  | `HS256 key ->
       fun input_str ->
         Mirage_crypto.Hash.SHA256.hmac ~key (Cstruct.of_string input_str)
         |> Cstruct.to_string
-  | HS512 key ->
+  | `HS512 key ->
       fun input_str ->
         Mirage_crypto.Hash.SHA512.hmac ~key (Cstruct.of_string input_str)
         |> Cstruct.to_string
-  | Unknown ->
+  | `Unknown ->
       fun input_str ->
         Mirage_crypto.Hash.SHA512.hmac ~key:(Cstruct.of_string "")
           (Cstruct.of_string input_str)
         |> Cstruct.to_string
 
-let string_of_algorithm = function
-  | RS256 _ -> "RS256"
-  | HS256 _ -> "HS256"
-  | HS512 _ -> "HS512"
-  | Unknown -> ""
+let string_of_algorithm : algorithm -> string = function
+  | `RS256 _ -> "RS256"
+  | `HS256 _ -> "HS256"
+  | `HS512 _ -> "HS512"
+  | `Unknown -> ""
 
-let algorithm_of_string = function
-  | "HS256" -> HS256 (Cstruct.of_string "")
-  | "HS512" -> HS512 (Cstruct.of_string "")
-  | "RS256" -> RS256 None
-  | _ -> Unknown
+let algorithm_of_string : string -> algorithm = function
+  | "HS256" -> `HS256 (Cstruct.of_string "")
+  | "HS512" -> `HS512 (Cstruct.of_string "")
+  | "RS256" -> `RS256 None
+  | _ -> `Unknown
 (* ---------- Algorithm ---------- *)
 (* ------------------------------- *)
 
@@ -80,7 +80,7 @@ type header = {
   kid : string option;
 }
 
-let make_header ~alg ?typ ?kid () = { alg; typ; kid }
+let make_header ~alg ?(typ = Some "JWT") ?kid () = { alg; typ; kid }
 let header_of_algorithm_and_typ alg typ = { alg; typ; kid = None }
 
 (* ------- *)
@@ -331,68 +331,50 @@ let asn1_sha256 =
   Cstruct.of_string
     "\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20"
 
-let pkcs1_sig header body =
-  let hlen = Cstruct.length header in
-  if Cstruct.check_bounds body hlen then
-    match Cstruct.split ~start:0 body hlen with
-    | a, b when Cstruct.equal a header -> Some b
-    | _ -> None
-  else None
-
-let find_jwk ~jwks alg kid kty =
-  let module J = Yojson.Basic.Util in
-  let find_matching key =
-    J.member "alg" key = `String alg
-    && J.member "kid" key = `String kid
-    && J.member "kty" key = `String kty
+let verify ~alg ~pub_key t =
+  let rs256 key signature unsigned_token =
+    let pkcs1_sig header body =
+      let hlen = Cstruct.length header in
+      if Cstruct.check_bounds body hlen then
+        match Cstruct.split ~start:0 body hlen with
+        | a, b when Cstruct.equal a header -> Some b
+        | _ -> None
+      else None
+    in
+    let open Mirage_crypto_pk in
+    let sign = Cstruct.of_string signature in
+    match Rsa.PKCS1.sig_decode ~key sign with
+    | None -> false
+    | Some asn1_sign -> (
+        match pkcs1_sig asn1_sha256 asn1_sign with
+        | None -> false
+        | Some decripted_sign ->
+            let token_hash =
+              Mirage_crypto.Hash.SHA256.digest
+              @@ Cstruct.of_string unsigned_token
+            in
+            Cstruct.equal decripted_sign token_hash)
   in
-  match List.find find_matching @@ J.to_list jwks with
-  | exception Not_found -> None
-  | key -> (
-      match (J.member "n" key, J.member "e" key) with
-      | `String n, `String e -> Some (n, e)
-      | _ -> None)
-
-let rs256 n e signature unsigned_token =
-  let open Mirage_crypto_pk in
-  let sign = Cstruct.of_string signature in
-  let n = Z_extra.of_cstruct_be @@ Cstruct.of_string n in
-  let e = Z_extra.of_cstruct_be @@ Cstruct.of_string e in
-  let key = Rsa.pub ~e ~n |> Result.get_ok in
-  match Rsa.PKCS1.sig_decode ~key sign with
-  | None -> false
-  | Some asn1_sign -> (
-      match pkcs1_sig asn1_sha256 asn1_sign with
-      | None -> false
-      | Some decripted_sign ->
-          let token_hash =
-            Mirage_crypto.Hash.SHA256.digest @@ Cstruct.of_string unsigned_token
-          in
-          Cstruct.equal decripted_sign token_hash)
-
-let verify ~alg ~jwks t =
-  assert (alg = "RS256");
-  let header = header_of_t t in
-  let payload = payload_of_t t in
-  let signature = signature_of_t t in
-  let unsigned_token = unsigned_token_of_t t in
-  let module J = Yojson.Basic.Util in
-  typ_of_header header = Some "JWT"
-  && algorithm_of_header header |> string_of_algorithm = alg
-  &&
-  match kid_of_header header with
-  | None -> false
-  | Some kid -> (
-      match find_jwk ~jwks alg kid "RSA" with
-      | None -> false
-      | Some (n, e) -> (
-          let n = b64_url_decode n in
-          let e = b64_url_decode e in
-          rs256 n e signature unsigned_token
-          &&
-          match List.assoc "exp" payload with
-          | exp -> int_of_string exp > int_of_float @@ Unix.time ()
-          | exception Not_found -> true))
+  match alg with
+  | `RS256 ->
+      let header = header_of_t t in
+      let payload = payload_of_t t in
+      let signature = signature_of_t t in
+      let unsigned_token = unsigned_token_of_t t in
+      let module J = Yojson.Basic.Util in
+      if typ_of_header header <> Some "JWT" then
+        Error "type of header is not JWT"
+      else if
+        match algorithm_of_header header with `RS256 _ -> false | _ -> true
+      then Error "algorithm of header is not RS256"
+      else if not (rs256 pub_key signature unsigned_token) then
+        Error "verification of signature failed"
+      else if
+        match List.assoc "exp" payload with
+        | exp -> int_of_string exp <= int_of_float @@ Unix.time ()
+        | exception Not_found -> false
+      then Error "already expired"
+      else Ok ()
 
 (* ----------- Verification ---------- *)
 (* ---------------------------------- *)
