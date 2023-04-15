@@ -31,7 +31,7 @@ exception Bad_payload
 
 (* IMPROVEME: add other algorithm *)
 type algorithm =
-  | RS256 of Nocrypto.Rsa.priv option
+  | RS256 of Mirage_crypto_pk.Rsa.priv option
   | HS256 of Cstruct.t (* the argument is the secret key *)
   | HS512 of Cstruct.t (* the argument is the secret key *)
   | Unknown
@@ -39,21 +39,21 @@ type algorithm =
 let fn_of_algorithm = function
   | RS256 (Some key) ->
       fun input_str ->
-        Nocrypto.Rsa.PKCS1.sign ~hash:`SHA256 ~key
+        Mirage_crypto_pk.Rsa.PKCS1.sign ~hash:`SHA256 ~key
           (`Message (Cstruct.of_string input_str))
         |> Cstruct.to_string
   | RS256 None -> failwith "Not supported"
   | HS256 key ->
       fun input_str ->
-        Nocrypto.Hash.SHA256.hmac ~key (Cstruct.of_string input_str)
+        Mirage_crypto.Hash.SHA256.hmac ~key (Cstruct.of_string input_str)
         |> Cstruct.to_string
   | HS512 key ->
       fun input_str ->
-        Nocrypto.Hash.SHA512.hmac ~key (Cstruct.of_string input_str)
+        Mirage_crypto.Hash.SHA512.hmac ~key (Cstruct.of_string input_str)
         |> Cstruct.to_string
   | Unknown ->
       fun input_str ->
-        Nocrypto.Hash.SHA512.hmac ~key:(Cstruct.of_string "")
+        Mirage_crypto.Hash.SHA512.hmac ~key:(Cstruct.of_string "")
           (Cstruct.of_string input_str)
         |> Cstruct.to_string
 
@@ -332,7 +332,7 @@ let asn1_sha256 =
     "\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20"
 
 let pkcs1_sig header body =
-  let hlen = Cstruct.len header in
+  let hlen = Cstruct.length header in
   if Cstruct.check_bounds body hlen then
     match Cstruct.split ~start:0 body hlen with
     | a, b when Cstruct.equal a header -> Some b
@@ -354,19 +354,19 @@ let find_jwk ~jwks alg kid kty =
       | _ -> None)
 
 let rs256 n e signature unsigned_token =
-  let open Nocrypto in
-  let open Numeric in
+  let open Mirage_crypto_pk in
   let sign = Cstruct.of_string signature in
-  let n = Z.of_cstruct_be @@ Cstruct.of_string n in
-  let e = Z.of_cstruct_be @@ Cstruct.of_string e in
-  match Rsa.PKCS1.sig_decode ~key:Rsa.{ n; e } sign with
+  let n = Z_extra.of_cstruct_be @@ Cstruct.of_string n in
+  let e = Z_extra.of_cstruct_be @@ Cstruct.of_string e in
+  let key = Rsa.pub ~e ~n |> Result.get_ok in
+  match Rsa.PKCS1.sig_decode ~key sign with
   | None -> false
   | Some asn1_sign -> (
       match pkcs1_sig asn1_sha256 asn1_sign with
       | None -> false
       | Some decripted_sign ->
           let token_hash =
-            Hash.SHA256.digest @@ Cstruct.of_string unsigned_token
+            Mirage_crypto.Hash.SHA256.digest @@ Cstruct.of_string unsigned_token
           in
           Cstruct.equal decripted_sign token_hash)
 

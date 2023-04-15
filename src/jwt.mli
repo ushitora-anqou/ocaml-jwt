@@ -31,7 +31,7 @@ exception Bad_payload
 
 (* IMPROVEME: add other algorithm *)
 type algorithm =
-  | RS256 of Nocrypto.Rsa.priv option
+  | RS256 of Mirage_crypto_pk.Rsa.priv option
   | HS256 of Cstruct.t (* the argument is the secret key *)
   | HS512 of Cstruct.t (* the argument is the secret key *)
   | Unknown
