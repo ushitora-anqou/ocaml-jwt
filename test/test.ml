@@ -93,14 +93,19 @@ let check_payload () =
 
 let check_verify () =
   let open Jwt in
+  let aux priv_key pub_key =
+    let payload = empty_payload |> add_claim sub "" |> add_claim aud "" in
+    let t = t_of_payload priv_key payload in
+    match Jwt.verify ~pub_key t with Error _ -> assert false | Ok () -> ()
+  in
+  (* RS256 *)
   let priv_key = Mirage_crypto_pk.Rsa.generate ~bits:2048 () in
   let pub_key = Mirage_crypto_pk.Rsa.pub_of_priv priv_key in
-  let header = make_header ~alg:(`RS256 (Some priv_key)) () in
-  let payload = empty_payload |> add_claim sub "" |> add_claim aud "" in
-  let t = t_of_header_and_payload header payload in
-  match Jwt.verify ~alg:`RS256 ~pub_key t with
-  | Error s -> failwith s
-  | Ok () -> ()
+  aux (`RS256 priv_key) (`RS256 pub_key);
+  (* ES256 *)
+  let priv_key, pub_key = Mirage_crypto_ec.P256.Dsa.generate () in
+  aux (`ES256 priv_key) (`ES256 pub_key);
+  ()
 
 let () =
   Mirage_crypto_rng_unix.initialize ();

@@ -2,4 +2,11 @@
  (name jwt)
  (public_name jwt)
  (modules jwt)
- (libraries base64 yojson re.str unix mirage-crypto mirage-crypto-pk))
+ (libraries
+  base64
+  yojson
+  re.str
+  unix
+  mirage-crypto
+  mirage-crypto-pk
+  mirage-crypto-ec))

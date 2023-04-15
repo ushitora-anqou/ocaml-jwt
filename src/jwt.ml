@@ -30,19 +30,41 @@ exception Bad_payload
 (* ---------- Algorithm ---------- *)
 
 (* IMPROVEME: add other algorithm *)
-type algorithm =
-  [ `RS256 of Mirage_crypto_pk.Rsa.priv option
-  | `HS256 of Cstruct.t (* the argument is the secret key *)
-  | `HS512 of Cstruct.t (* the argument is the secret key *)
-  | `Unknown ]
+type algorithm = [ `RS256 | `ES256 | `HS256 | `HS512 ]
 
-let fn_of_algorithm = function
-  | `RS256 (Some key) ->
+type private_key =
+  [ `RS256 of Mirage_crypto_pk.Rsa.priv
+  | `ES256 of Mirage_crypto_ec.P256.Dsa.priv
+  | `HS256 of Cstruct.t (* the argument is the secret key *)
+  | `HS512 of Cstruct.t (* the argument is the secret key *) ]
+
+type public_key =
+  [ `RS256 of Mirage_crypto_pk.Rsa.pub
+  | `ES256 of Mirage_crypto_ec.P256.Dsa.pub ]
+
+let algorithm_of_private_key (x : private_key) : algorithm =
+  match x with
+  | `RS256 _ -> `RS256
+  | `ES256 _ -> `ES256
+  | `HS256 _ -> `HS256
+  | `HS512 _ -> `HS512
+
+let algorithm_of_public_key (x : public_key) =
+  match x with `RS256 _ -> `RS256 | `ES256 _ -> `ES256
+
+let fn_of_algorithm : private_key -> string -> string = function
+  | `RS256 key ->
       fun input_str ->
         Mirage_crypto_pk.Rsa.PKCS1.sign ~hash:`SHA256 ~key
           (`Message (Cstruct.of_string input_str))
         |> Cstruct.to_string
-  | `RS256 None -> failwith "Not supported"
+  | `ES256 key ->
+      fun input_str ->
+        let r, s =
+          input_str |> Cstruct.of_string |> Mirage_crypto.Hash.SHA256.digest
+          |> Mirage_crypto_ec.P256.Dsa.sign ~key
+        in
+        Cstruct.(concat [ r; s ] |> to_string)
   | `HS256 key ->
       fun input_str ->
         Mirage_crypto.Hash.SHA256.hmac ~key (Cstruct.of_string input_str)
@@ -51,23 +73,19 @@ let fn_of_algorithm = function
       fun input_str ->
         Mirage_crypto.Hash.SHA512.hmac ~key (Cstruct.of_string input_str)
         |> Cstruct.to_string
-  | `Unknown ->
-      fun input_str ->
-        Mirage_crypto.Hash.SHA512.hmac ~key:(Cstruct.of_string "")
-          (Cstruct.of_string input_str)
-        |> Cstruct.to_string
 
 let string_of_algorithm : algorithm -> string = function
-  | `RS256 _ -> "RS256"
-  | `HS256 _ -> "HS256"
-  | `HS512 _ -> "HS512"
-  | `Unknown -> ""
+  | `RS256 -> "RS256"
+  | `ES256 -> "ES256"
+  | `HS256 -> "HS256"
+  | `HS512 -> "HS512"
 
 let algorithm_of_string : string -> algorithm = function
-  | "HS256" -> `HS256 (Cstruct.of_string "")
-  | "HS512" -> `HS512 (Cstruct.of_string "")
-  | "RS256" -> `RS256 None
-  | _ -> `Unknown
+  | "HS256" -> `HS256
+  | "HS512" -> `HS512
+  | "RS256" -> `RS256
+  | "ES256" -> `ES256
+  | _ -> failwith "Unknown algorithm"
 (* ---------- Algorithm ---------- *)
 (* ------------------------------- *)
 
@@ -287,8 +305,10 @@ let unsigned_token_of_header_and_payload header payload =
   let b64_payload = b64_url_encode (string_of_payload payload) in
   b64_header ^ "." ^ b64_payload
 
-let t_of_header_and_payload header payload =
-  let algo = fn_of_algorithm (algorithm_of_header header) in
+let t_of_payload ?header priv_key payload =
+  let alg = algorithm_of_private_key priv_key in
+  let header = match header with Some x -> x | None -> make_header ~alg () in
+  let algo = fn_of_algorithm priv_key in
   let unsigned_token = unsigned_token_of_header_and_payload header payload in
   let signature = algo unsigned_token in
   { header; payload; signature; unsigned_token }
@@ -331,7 +351,7 @@ let asn1_sha256 =
   Cstruct.of_string
     "\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20"
 
-let verify ~alg ~pub_key t =
+let verify ~(pub_key : public_key) t =
   let rs256 key signature unsigned_token =
     let pkcs1_sig header body =
       let hlen = Cstruct.length header in
@@ -355,26 +375,32 @@ let verify ~alg ~pub_key t =
             in
             Cstruct.equal decripted_sign token_hash)
   in
-  match alg with
-  | `RS256 ->
-      let header = header_of_t t in
-      let payload = payload_of_t t in
-      let signature = signature_of_t t in
-      let unsigned_token = unsigned_token_of_t t in
-      let module J = Yojson.Basic.Util in
-      if typ_of_header header <> Some "JWT" then
-        Error "type of header is not JWT"
-      else if
-        match algorithm_of_header header with `RS256 _ -> false | _ -> true
-      then Error "algorithm of header is not RS256"
-      else if not (rs256 pub_key signature unsigned_token) then
-        Error "verification of signature failed"
-      else if
-        match List.assoc "exp" payload with
-        | exp -> int_of_string exp <= int_of_float @@ Unix.time ()
-        | exception Not_found -> false
-      then Error "already expired"
-      else Ok ()
+  let es256 key signature unsigned_token =
+    let sign = Cstruct.of_string signature in
+    let r = Cstruct.sub sign 0 32 in
+    let s = Cstruct.sub sign 32 32 in
+    unsigned_token |> Cstruct.of_string |> Mirage_crypto.Hash.SHA256.digest
+    |> Mirage_crypto_ec.P256.Dsa.verify ~key (r, s)
+  in
+  let header = header_of_t t in
+  let payload = payload_of_t t in
+  let signature = signature_of_t t in
+  let unsigned_token = unsigned_token_of_t t in
+  if typ_of_header header <> Some "JWT" then Error "type of header is not JWT"
+  else if
+    match List.assoc "exp" payload with
+    | exp -> int_of_string exp <= int_of_float @@ Unix.time ()
+    | exception Not_found -> false
+  then Error "already expired"
+  else if algorithm_of_public_key pub_key <> algorithm_of_header header then
+    Error "algorithm of header is wrong"
+  else if
+    not
+      (match pub_key with
+      | `RS256 pub_key -> rs256 pub_key signature unsigned_token
+      | `ES256 pub_key -> es256 pub_key signature unsigned_token)
+  then Error "verification of signature failed"
+  else Ok ()
 
 (* ----------- Verification ---------- *)
 (* ---------------------------------- *)

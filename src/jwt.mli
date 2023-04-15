@@ -29,13 +29,20 @@ exception Bad_payload
 (* ------------------------------- *)
 (* ---------- Algorithm ---------- *)
 
-(* IMPROVEME: add other algorithm *)
-type algorithm =
-  [ `RS256 of Mirage_crypto_pk.Rsa.priv option
-  | `HS256 of Cstruct.t (* the argument is the secret key *)
-  | `HS512 of Cstruct.t (* the argument is the secret key *)
-  | `Unknown ]
+type algorithm = [ `RS256 | `ES256 | `HS256 | `HS512 ]
 
+type private_key =
+  [ `RS256 of Mirage_crypto_pk.Rsa.priv
+  | `ES256 of Mirage_crypto_ec.P256.Dsa.priv
+  | `HS256 of Cstruct.t (* the argument is the secret key *)
+  | `HS512 of Cstruct.t (* the argument is the secret key *) ]
+
+type public_key =
+  [ `RS256 of Mirage_crypto_pk.Rsa.pub
+  | `ES256 of Mirage_crypto_ec.P256.Dsa.pub ]
+
+val algorithm_of_private_key : private_key -> algorithm
+val algorithm_of_public_key : public_key -> algorithm
 val string_of_algorithm : algorithm -> string
 val algorithm_of_string : string -> algorithm
 
@@ -178,7 +185,7 @@ val json_of_payload : payload -> Yojson.Basic.t
 
 type t
 
-val t_of_header_and_payload : header -> payload -> t
+val t_of_payload : ?header:header -> private_key -> payload -> t
 (* ------- *)
 (* getters *)
 
@@ -196,8 +203,4 @@ val t_of_token : string -> t
 (* ----------- JWT type ----------- *)
 (* -------------------------------- *)
 
-val verify :
-  alg:[< `RS256 ] ->
-  pub_key:Mirage_crypto_pk.Rsa.pub ->
-  t ->
-  (unit, string) result
+val verify : pub_key:public_key -> t -> (unit, string) result
